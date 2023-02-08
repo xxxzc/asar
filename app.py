@@ -1,81 +1,85 @@
-"""
-HTTP Server for Multi Rasa Node(Instance)
+"""A HTTP Server to Manage Multi Rasa Model
 
-GET node - all node info
-GET node/<name> - certain node info
-POST node/<name> - redirect to Rasa HTTP API of Node
-~~PUT node/<name> - init node~~
-PATCH node/<name> - update node
+GET /model/<name> - model info
+POST /model/<name> - communicate to Rasa HTTP API
+PUT /model/<name> - put(replace) file and update(train) model
+PATCH /model/<name> - update file and update(train) model
 """
 
-from typing import Type
-from pathlib import Path
+__author__ = "zicong xie"
+__email__ = "zicongx@foxmail.com"
 
 from sanic import Sanic, response, Request, HTTPResponse
 from sanic.response import json as json_resp
 from sanic.views import HTTPMethodView
 from subprocess import check_output, STDOUT
+from functools import wraps
+from pathlib import Path
+import utils
 
-svctl = "supervisorctl"
 
 def sh(*args):
     return check_output(args, stderr=STDOUT).decode("utf-8")
 
 
-ROOT = Path(__file__).parent
-DATA_DIR = ROOT.parent / 'data'
-NODE_DIR = DATA_DIR / 'node'
-
 app: Sanic = Sanic("rama")
 
 
-def Node(path: Path) -> HTTPMethodView:
-    """Node
+def ret(success=True, text="success", custom={}):
+    custom["success"] = success
+    return json_resp({"text": text, "custom": custom})
+
+
+def check():
+    def decorator(f):
+        @wraps(f)
+        async def decorated_function(r: Request, name: str, *args, **kwargs):
+            path = utils.MODEL_DIR / name
+            r.ctx.name = name
+            r.ctx.path = path
+
+            if not path.exists():
+                return ret(False, f"Model {name} is not initialized yet!")
+
+            response = await f(r, *args, **kwargs)
+            return response
+        return decorated_function
+    return decorator
+
+
+@app.get("/model/<name:str>")
+@check()
+async def get_model(r: Request) -> HTTPResponse:
+    """Get model info"""
+    return json_resp({"path": r.ctx.path.name})
+
+
+@app.post("/model/<name:str>")
+@check()
+async def post_model(r: Request) -> HTTPResponse:
+    """Communicate with Rasa Model HTTP API"""
+    return json_resp({})
+
+
+@app.put("/model/<name:str>")
+@check()
+async def put_model(r: Request) -> HTTPResponse:
+    """Put/Replace file content stored in json body { path: content }
+
+    key is file path, value is file content(string or json)
+
+    if key is endswith 'yml', json value will be converted to yaml format
     """
-
-    class _Node(HTTPMethodView):
-        def __init__(self) -> None:
-            self.name = path.name    
-            self.path = path        
-            super().__init__()
-
-        
-        async def get(self, r: Request) -> HTTPResponse:
-            """Get node info"""
-            msg = sh(svctl, "status", "app")
-            return json_resp({"name": self.name, "msg": msg})
+    return json_resp({})
 
 
-        async def patch(self, r: Request) -> HTTPResponse:
-            """Update Node Data"""
-            j: dict = r.json or {}
-            for key, value in j.items():
-                pass
-            return json_resp({})
+@app.patch("/model/<name:str>")
+@check()
+async def patch_model(r: Request) -> HTTPResponse:
+    """Update file content stored in json body { path: content }
+    """
+    return json_resp({})
 
 
-    return _Node()
-
-
-NODES = {}
-
-
-def create_route():
-    for path in NODE_DIR.iterdir():
-        name = path.name
-        node = Node(path)
-        NODES[name] = node
-        app.add_route(node.as_view(), f"/node/{name}")
-
-
-create_route()
-
-
-@app.get("/node")
-async def node_info(r: Request) -> HTTPResponse:
-    return json_resp({
-        "nodes": list(NODES.keys())
-    })
-
-
-app.run(host="0.0.0.0", port=5000, debug=True)
+if __name__ == '__main__':
+    app.run(host="127.0.0.1", port=9900, dev=True)

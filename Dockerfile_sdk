@@ -1,0 +1,9 @@
+FROM clearlinux/python:3.10
+
+ENV TZ="Asia/Shanghai"
+# RUN swupd bundle-add c-basic
+RUN swupd bundle-add nodejs-basic
+RUN pip config set global.index-url https://mirrors.ustc.edu.cn/pypi/web/simple
+RUN pip install rasa-sdk sanic_limiter ujson jieba pyyaml pymysql markdown cryptography --no-cache-dir
+WORKDIR /app
+CMD ["python", "-m", "app"]
