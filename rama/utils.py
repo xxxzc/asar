@@ -1,9 +1,12 @@
 from pathlib import Path
 
 from sanic.response import json as json_resp
+from sanic.log import logger
 import orjson
 
 from ruamel.yaml import YAML
+
+ROOT = Path(__file__).parent.parent
 
 
 def dict_deepcopy(o):
@@ -43,7 +46,7 @@ class Result(dict):
         super().__init__()
         self.text = text or "unknown"
         self['custom'] = {"data": []}
-        self.custom(success=success, msg=msg, **kwargs)
+        self.update_custom(success=success, msg=msg, **kwargs)
 
     @classmethod
     def from_dict(cls, d: dict):
@@ -68,9 +71,21 @@ class Result(dict):
     def text(self, text):
         self.set_text(text)
 
-    def custom(self, **kwargs):
+    @property
+    def msg(self) -> str:
+        return self.custom.get("msg", "")
+
+    @msg.setter
+    def msg(self, msg):
+        self.update_custom(msg=msg)
+
+    @property
+    def custom(self) -> dict:
+        return self['custom']
+
+    def update_custom(self, **kwargs):
         """Update kwargs to custom, kwargs will be deepcopyed"""
-        self["custom"].update(dict_deepcopy(kwargs))
+        self.custom.update(dict_deepcopy(kwargs))
         return self
 
     """custom:success
@@ -80,11 +95,11 @@ class Result(dict):
     """
 
     def is_success(self):
-        return self['custom']['success']
+        return self.custom['success']
 
     def set_success(self, text, msg, success=True):
         self.text = text
-        return self.custom(success=success, msg=msg)
+        return self.update_custom(success=success, msg=msg)
 
     def set_failure(self, text, msg):
         return self.set_success(text, msg, False)
@@ -93,7 +108,7 @@ class Result(dict):
 
     @property
     def data(self) -> list[dict]:
-        return self['custom']['data']
+        return self.custom["data"]
 
     def append(self, item: dict):
         """Add item to data"""
@@ -102,6 +117,14 @@ class Result(dict):
 
     def as_dict(self):
         return dict_deepcopy(self)
+
+    def log(self):
+        msg = f"[{self.text}] {self.msg}"
+        if self.is_success():
+            logger.info(msg)
+        else:
+            logger.error(msg)
+        return self
 
     @property
     def resp(self):
