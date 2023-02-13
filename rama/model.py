@@ -3,14 +3,13 @@ from rama.utils import Result
 from pathlib import Path
 from functools import cached_property
 import asyncio
-from typing import Optional, Union
+from typing import Any, Callable, Optional, Union
 from shutil import rmtree, copyfile
 from os import cpu_count
 
-from sanic import Sanic
 from sanic.log import logger
 
-from aiohttp import ClientSession, ClientResponse
+from aiohttp import ClientSession
 import requests
 
 from functools import lru_cache
@@ -36,7 +35,7 @@ def full_path(path: Path) -> str:
 
 
 class ModelStatus:
-    Wait = "model_waiting"
+    Waiting = "model_waiting"
     Starting = "model_starting"
     Training = "model_training"
     Running = "model_running"
@@ -48,29 +47,36 @@ class Model:
 
     use get_model to get model instance
     """
+    running_models: dict[str, "Model"] = {}
 
-    def __init__(self, name: str, client: ClientSession) -> None:
+    def __init__(self, name: str) -> None:
         self.name = name
         self.program = f"model_{name}"
         self.train_program = f"{self.program}_training"
+
         self.dir = MODEL_DIR / name
-        self.status = Result(ModelStatus.Wait)
-        self.client = client
+        self.status = Result(ModelStatus.Waiting)
+
+
+    @classmethod
+    @lru_cache(maxsize=None)
+    def get_model(cls, name: str) -> "Model":
+        return cls(name)
 
 
     def log(self, text: str, msg: str="", *args, **kwargs) -> Result:
-        self.status = Result(text, f"<{self.name}> {msg}", 'error' not in msg)
+        self.status = Result(text, f"Model <{self.name}> {msg}", 'error' not in msg)
         return self.status.log(*args, **kwargs)
 
 
-    async def run(self, data: dict={}):
+    async def run(self, data: dict={}, callback: Optional[Callable]=None):
         """Run latest model with data"""
 
         # check models dir
-        self.get_path("models", mkdir=True)
+        self.path("models", mkdir=True)
 
         # check supervisor.conf
-        conf = self.get_path("supervisor.conf")
+        conf = self.path("supervisor.conf")
         if not conf.exists():
             with open(conf, "w") as f:
                 f.write("\n".join([
@@ -91,7 +97,7 @@ class Model:
                 "supervisorctl", "update", cwd=ROOT)
             await update_process.wait()
 
-        if not self.latest_local() or data: # restart train program if no trained model
+        if not self.latest() or data: # restart train program if no trained model
             self.log(ModelStatus.Training, "Start training...")
             
             for file, content in data.items():
@@ -100,35 +106,35 @@ class Model:
             # check yml
             for yml in ["config.yml", "credentials.yml", "domain.yml", "endpoints.yml",
                 "data/nlu.yml", "data/rules.yml", "data/stories.yml"]:
-                if not self.get_path(yml).exists():
-                    copyfile(ROOT / 'sample' / yml, self.get_path(yml))
+                if not self.path(yml).exists():
+                    copyfile(ROOT / 'sample' / yml, self.path(yml))
 
-            config = utils.yaml_load(self.get_path("config.yml"))
+            config = utils.yaml_load(self.path("config.yml"))
             if 'pipeline' in config and isinstance(config['pipeline'], list):
                 for pipe in config['pipeline']:
                     for key, value in pipe.items():
                         # to absolute path
                         if isinstance(value, str) and value.startswith('.'):
-                            pipe[key] = full_path(self.get_path(value))
-            utils.yaml_dump(config, self.get_path("config.yml")) 
+                            pipe[key] = full_path(self.path(value))
+            utils.yaml_dump(config, self.path("config.yml")) 
 
             restart_process = await asyncio.create_subprocess_exec(
                 "supervisorctl", "restart", self.train_program, cwd=ROOT)
             await restart_process.wait()
             await asyncio.sleep(30)
 
-        # wait for trained model
+        # wait for model to be trained
         seconds, step = 30, 15
-        latest_model = self.latest_local()
+        latest_model = self.latest()
         while not latest_model:
-            self.log(ModelStatus.Training, f"Waiting for trained model...{seconds} seconds")
+            self.log(ModelStatus.Training, f"Waiting for model to be trained...{seconds} seconds")
             await asyncio.sleep(step)
             seconds += step
-            latest_model = self.latest_local()
+            latest_model = self.latest()
         
         info = svctl.getProcessInfo(self.program)
         if info['state'] != 20:
-            self.log(ModelStatus.Starting, "Model stopped, restarting...")
+            self.log(ModelStatus.Starting, "is stopped, restarting...")
             restart_process = await asyncio.create_subprocess_exec(
                 "supervisorctl", "restart", self.program, cwd=ROOT)
             await restart_process.wait()
@@ -138,8 +144,8 @@ class Model:
         current_model: Optional[str] = None
         while True: # wait for model to started
             try:
-                self.log(ModelStatus.Starting, f"Try to connect to model...{seconds} seconds")
-                status, result = await self.http_get("status")
+                self.log(ModelStatus.Starting, f"Waiting for model to start...{seconds} seconds")
+                status, result = await self.http("get", "status")
                 if status == 200:
                     current_model = result.get("model_file", "").split("/")[-1]
                     break
@@ -156,40 +162,61 @@ class Model:
             # this method will make model down a while
             # https://rasa.com/docs/rasa/pages/http-api#operation/replaceModel
 
-            self.log(ModelStatus.Starting, "Current running model is not latest, replacing...")
-            status, result = await self.http_put("model", {
+            self.log(ModelStatus.Starting, "is not latest, replacing...")
+            self.is_running = False
+            status, result = await self.http("put", "model", json={
                 "model_file": f"models/{latest_model}"
             })
             if status == 204:
                 logger.debug("Model replaced!")
             else:
-                self.log(ModelStatus.Error, f"Model replacement failed: {result}")
+                self.log(ModelStatus.Error, f"Replacement failed: {result}")
 
-        return self.log(ModelStatus.Running, f"Model is running, current model: {await self.current_running()}")
+        return self.log(ModelStatus.Running, f"is running, current model: {self.current()}")
 
     
-    def latest_local(self) -> Optional[str]:
+    def latest(self) -> Optional[str]:
         """Latest trained model name"""
-        latest = get_latest_model(full_path(self.get_path("models")))
+        latest = get_latest_model(full_path(self.path("models")))
         if not latest: return None
         return latest.split('/')[-1]
 
 
-    async def current_running(self) -> Optional[str]:
-        status, result = await self.http_get("status")
-        if status == 200:
-            return result.get("model_file", "").split("/")[-1]
+    @property
+    def is_running(self) -> bool:
+        return self.status.custom.get("running", False)
+
+
+    @is_running.setter
+    def is_running(self, running):
+        self.status.update_custom(running=running)
+
+
+    def current(self) -> Optional[str]:
+        """Return current model name if model is running"""
+        resp = requests.get(self.url("status"))
+        if resp.status_code == 200:
+            self.is_running = True
+            return resp.json().get("model_file", "").split("/")[-1]
+        self.is_running = False
         return None
 
+    
+    def path(self, sub: str="", mkdir=False, rm=False) -> Path:
+        path = self.dir
+        if sub: path = path / sub
+        if not path.parent.exists():
+            path.parent.mkdir(exist_ok=True, parents=True)
 
-    def rm(self, path):
-        """Remove file or directory in model dir"""
-        path = self.get_path(path)
-        if not path.exists(): return
-        if path.is_dir():
-            rmtree(path)
-        else:
-            path.unlink(missing_ok=True)
+        if mkdir and not path.exists():
+            path.mkdir(exist_ok=True)
+
+        if rm and path.exists():
+            if path.is_dir():
+                rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+        return path
 
 
     def put(self, path, obj: Union[str, dict]):
@@ -201,7 +228,7 @@ class Model:
                 - str: write to path
                 - dict: store yml if path is yml then json
         """
-        path = self.get_path(path)
+        path = self.path(path)
         with open(path, 'w') as f:
             if isinstance(obj, str):
                 f.write(obj)
@@ -210,20 +237,10 @@ class Model:
             else:
                 utils.json.dump(obj, f)
 
-    
-    def get_path(self, sub: str="", mkdir=False) -> Path:
-        path = self.dir
-        if sub: path = path / sub
-        if mkdir and not path.exists():
-            path.mkdir(exist_ok=True, parents=True)
-        if not path.parent.exists():
-            path.parent.mkdir(exist_ok=True, parents=True)
-        return path
-
 
     @cached_property
     def port(self):
-        """Get port of model"""
+        """Get server port of model"""
         ports = [int(p.name[5:]) for p in self.dir.glob("port_*")]
         if len(ports) == 0:
             used_ports = set([int(p.name[5:]) for p in MODEL_DIR.glob("*/port_*")])
@@ -232,59 +249,38 @@ class Model:
                     ports = [i]
                     break
         port = ports[0]
-        self.get_path(f"port_{port}").touch()
+        self.path(f"port_{port}").touch()
         return port
 
 
-    def get_url(self, path: str):
+    def url(self, path: str):
         return f"http://localhost:{self.port}/{path}"
 
 
-    async def http_get(self, path: str, data: dict={}) -> tuple[int, dict]:
-        try:
-            async with self.client.get(self.get_url(path), params=data) as resp:
-                result = {}
-                if resp.content_type == "application/json":
-                    result = await resp.json()
-                return resp.status, result
-        except Exception as e:
-            logger.debug(e)
-            return 500, {"error": str(e)}
+    async def http(self, method="get", path: str="", **kwargs) -> tuple[int, dict]:
+        """Communicate to Rasa HTTP API 
+        https://rasa.com/docs/rasa/pages/http-api
 
-    
-    async def http_post(self, path: str, data={}) -> tuple[int, dict]:
+        Args:
+            method: HTTPMethod, default post
+            path: Rasa HTTP API Path, default "webhooks/rest/webhook"
+            **kwargs: e.g. json={}
+                see https://docs.aiohttp.org/en/stable/client.html
+        """
         try:
-            async with self.client.post(self.get_url(path), json=data) as resp:
-                result = {}
-                if resp.content_type == "application/json":
-                    result = await resp.json()
-                return resp.status, result
-        except Exception as e:
-            logger.debug(e)
-            return 500, {"error": str(e)}
-
-    
-    async def http_put(self, path: str, data={}) -> tuple[int, dict]:
-        try:
-            async with self.client.put(self.get_url(path), json=data) as resp:
-                result = {}
-                if resp.content_type == "application/json":
-                    result = await resp.json()
-                return resp.status, result
+            async with ClientSession() as client:
+                http_method = getattr(client, method.lower())
+                if not http_method: return 404, {"error": f"HTTP method {http_method} is not valid." }
+                async with http_method(self.url(path), **kwargs) as resp:
+                    result = {}
+                    if resp.content_type == "application/json":
+                        result = await resp.json()
+                    return resp.status, result
         except Exception as e:
             logger.debug(e)
             return 500, {"error": str(e)}
 
 
-    async def http(self, path: str="webhooks/rest/webhook", data={}, method="POST") -> tuple[int, dict]:
-        http_method = self.http_post
-        if method == 'GET':
-            http_method = self.http_get
-        elif method == "PUT":
-            http_method = self.http_put
-        return await http_method(path, data)
-
-
-
-def get_models() -> list[str]:
-    return [m.name for m in MODEL_DIR.iterdir()]
+    @staticmethod
+    def get_all_models() -> list["Model"]:
+        return [Model.get_model(r.name) for r in MODEL_DIR.iterdir()]
