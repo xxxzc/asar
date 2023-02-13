@@ -47,7 +47,6 @@ class Model:
 
     use get_model to get model instance
     """
-    running_models: dict[str, "Model"] = {}
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -56,16 +55,18 @@ class Model:
 
         self.dir = MODEL_DIR / name
         self.status = Result(ModelStatus.Waiting)
+        self.is_running = False
 
 
-    @classmethod
+    @staticmethod
     @lru_cache(maxsize=None)
-    def get_model(cls, name: str) -> "Model":
-        return cls(name)
+    def get_model(name: str) -> "Model":
+        return Model(name)
 
 
     def log(self, text: str, msg: str="", *args, **kwargs) -> Result:
         self.status = Result(text, f"Model <{self.name}> {msg}", 'error' not in msg)
+        self.status.update_custom(running=self.is_running)
         return self.status.log(*args, **kwargs)
 
 
@@ -180,16 +181,6 @@ class Model:
         latest = get_latest_model(full_path(self.path("models")))
         if not latest: return None
         return latest.split('/')[-1]
-
-
-    @property
-    def is_running(self) -> bool:
-        return self.status.custom.get("running", False)
-
-
-    @is_running.setter
-    def is_running(self, running):
-        self.status.update_custom(running=running)
 
 
     def current(self) -> Optional[str]:

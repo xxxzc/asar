@@ -83,9 +83,9 @@ async def check_models(app: Sanic, seconds: int):
     while True:
         for model in Model.get_all_models():
             logger.info(f"Checking model <{model.name}>:")
+            model.current() # update model running status
             if not model.is_running:
                 app.add_task(model.run())
-            model.current()
         await asyncio.sleep(seconds)
 
 app.add_task(check_models(app, 60))
