@@ -2,7 +2,7 @@ from pathlib import Path
 
 from sanic.response import json as json_resp
 from sanic.log import logger
-import orjson
+import ujson as json
 
 from ruamel.yaml import YAML
 
@@ -10,7 +10,7 @@ ROOT = Path(__file__).parent.parent
 
 
 def dict_deepcopy(o):
-    return orjson.loads(orjson.dumps(o))
+    return json.loads(json.dumps(o))
 
 
 yaml = YAML(typ='safe')
@@ -42,7 +42,7 @@ class Result(dict):
     it will do a deepcopy for item that add to custom
     """
 
-    def __init__(self, text="utter_default", success=True, msg="Rasa fallback", **kwargs):
+    def __init__(self, text="utter_default", msg="", success=True, **kwargs):
         super().__init__()
         self.text = text or "unknown"
         self['custom'] = {"data": []}
@@ -118,12 +118,12 @@ class Result(dict):
     def as_dict(self):
         return dict_deepcopy(self)
 
-    def log(self):
+    def log(self, *args, **kwargs):
         msg = f"[{self.text}] {self.msg}"
         if self.is_success():
-            logger.info(msg)
+            logger.info(msg, *args, **kwargs)
         else:
-            logger.error(msg)
+            logger.error(msg, *args, **kwargs)
         return self
 
     @property
