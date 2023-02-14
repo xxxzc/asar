@@ -19,16 +19,14 @@ PUT /model/<name> - put(replace) file and update(train) model
 __author__ = "zicong xie"
 __email__ = "zicongx@foxmail.com"
 
-from rama.utils import Result
-from rama.model import Model, ModelStatus
-
 import asyncio
 from pathlib import Path
 
-from sanic import Sanic, Request, HTTPResponse
-from sanic.response import json as json_resp
+from sanic import HTTPResponse, Request, Sanic
 from sanic.log import logger
+from sanic.response import json as json_resp
 
+from model import Model, Status
 
 app: Sanic = Sanic("rama")
 
@@ -43,8 +41,8 @@ async def get_model(r: Request, name: str) -> HTTPResponse:
     """Get model info"""
     model = Model.get_model(name)
     if not model.dir.exists():
-        return Result("model_not_exists", f"Model <{name}> is not exists", False).resp
-    return model.status.resp
+        return json_resp(model.log("NOT_EXTSTS", "does not exists").as_dict(), 400)
+    return json_resp(model.status.as_dict())
 
 
 @app.post("/model/<name:str>")
@@ -59,6 +57,8 @@ async def post_model(r: Request, name: str) -> HTTPResponse:
             see https://docs.aiohttp.org/en/stable/client.html
     """
     model = Model.get_model(name)
+    if not model.status.is_running:
+        return json_resp(model.status.as_dict(), 400)
     j = r.json or {}
     status, result = await model.http(
         j.pop("method", "post"), 
@@ -75,7 +75,8 @@ async def put_model(r: Request, name: str) -> HTTPResponse:
     """
     model = Model.get_model(name)
     app.add_task(model.run(r.json or {}))
-    return Result(ModelStatus.Training, f"Model <{name}> start training").resp
+    model.log(Status.Training, "Starting")
+    return json_resp(model.status.as_dict())
 
 
 async def check_models(app: Sanic, seconds: int):
@@ -83,9 +84,7 @@ async def check_models(app: Sanic, seconds: int):
     while True:
         for model in Model.get_all_models():
             logger.info(f"Checking model <{model.name}>:")
-            model.current() # update model running status
-            if not model.is_running:
-                app.add_task(model.run())
+            app.add_task(model.run())
         await asyncio.sleep(seconds)
 
 app.add_task(check_models(app, 60))
@@ -98,7 +97,5 @@ async def update_supervisor():
 
 app.add_task(update_supervisor())
 
-
-if __name__ == '__main__':
-    
+if __name__ == '__main__':    
     app.run(host="127.0.0.1", port=5000, debug=True, auto_reload=True)
