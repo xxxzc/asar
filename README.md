@@ -1,9 +1,9 @@
 ### ASAR: A HTTP Server to Arrange Rasa models
 
-#### FEATURES
+#### Features
 
-- Supervisor's cli and ui to manage multiple rasa models
-- Async HTTP API to update config and model
+- Supervisor cli and ui to manage multiple rasa models
+- Async HTTP API to put file and update model
 - Train and replace model without affecting current service<sup>1</sup>
 
 > 1 Replacing model takes some time, during which requests for that model will be waited but not be dropped
@@ -17,16 +17,16 @@ docker build . -t asar
 ```
 
 ```shell
-docker run -d -p 5000:5000 -p 9999:9999 -v $(pwd)/../data:/data -v $(pwd):/app --name asar asar
+docker run -d -p 5000:5000 -p 9999:9999 -v ~/data:/data -v $(pwd):/app --name asar asar
 ```
 
-- 5000: This Server
+- 5000: This server
 - 9999: Supervisor
-- /data: store model files
+- /data: store model files in /data/model/<name>/
 - /app: auto reload code
 
 ```shell
-docker logs -f --tail 1000 asar # service log, not supervisor log
+docker logs -f --tail 1000 asar # server log, not supervisor log
 ```
 
 ##### Local(Not Recommended)
@@ -35,9 +35,15 @@ install rasa and the required modules listed in Dockerfile, then run `supervisor
 
 #### HTTP API
 
-http://localhost:5000/docs
+Just see app.py, or http://localhost:5000/docs
 
 #### Supervisor
 
 http://localhost:9999
+
+#### Claims
+
+I'm not good at async, state, docker, supervisor, etc. 
+
+If you have any suggestion, please let me know.
 

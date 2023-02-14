@@ -45,7 +45,7 @@ class ModelStatus:
     def message(self):
         run_status = ModelStatus.Running if self.is_running else ModelStatus.Stopped
         run_status = "" if run_status == self.status else f" [{run_status}]"
-        return f"Model <{self.name}>{run_status} [{self.status}] {self.msg}"
+        return f"Model {self.name}{run_status} [{self.status}] {self.msg}"
 
     
     def as_dict(self):
@@ -72,6 +72,7 @@ class Model:
         self.train_program = f"{self.program}_training"
         self.dir = MODEL_DIR / name
         self.status: ModelStatus = ModelStatus(name)
+        self.path("models", mkdir=True)
         
 
     @staticmethod
@@ -83,9 +84,6 @@ class Model:
     async def run(self, data: dict={}):
         """Check and run latest model with data"""
         await self.current() # check current status
-
-        # check models dir
-        self.path("models", mkdir=True)
 
         # check supervisor.conf
         conf = self.path("supervisor.conf")
@@ -147,12 +145,10 @@ class Model:
             seconds = 30
 
         # wait until model trained
-        latest_model = self.latest()
-        while not latest_model:
+        while not self.latest():
             self.status.set(ModelStatus.Training, f"Waiting for model to be trained...{seconds} seconds")
             await asyncio.sleep(step)
             seconds += step
-            latest_model = self.latest()
         
         # restart model if stopped
         info = svctl.getProcessInfo(self.program)
@@ -164,36 +160,30 @@ class Model:
 
         # wait until model started
         seconds, step = 0, 10
-        current_model: Optional[str] = None
         while True: 
             try:
                 status, result = await self.endpoint("get", "status")
-                if status == 200:
-                    current_model = result.get("model_file", "").split("/")[-1]
-                    break
-                elif status == 409:
+                if status == 200 or status == 409:
                     break
             except: pass
             await asyncio.sleep(step)
             seconds += step
             self.status.set(ModelStatus.Starting, f"Waiting for model to start...{seconds} seconds")
 
-        # use latest model
-        # There is no need to consider repeated calls, 
-        # because if there is already a replacement currently in progress, 
-        # we will be stuck at previous step and will not proceed here
-        if not current_model or current_model != latest_model:
-            # Call Rasa to replace model, this method will make model down a while(~30s)
-            # https://rasa.com/docs/rasa/pages/http-api#operation/replaceModel
-            await asyncio.sleep(1)
-            self.status.set(ModelStatus.Replacing, "Running model is not latest, replacing...")
-            status, result = await self.endpoint("put", "model", json={
-                "model_file": f"models/{latest_model}"
-            })
-            if status == 204:
-                logger.debug("Model replaced!")
-            else:
-                self.status.set(ModelStatus.Error, f"Replacement failed: {result}")
+        async with asyncio.Lock():
+            latest_model = self.latest()
+            current_model = await self.current()
+            if not current_model or current_model != latest_model:
+                # Call Rasa to replace model, this method will make model down a while(~30s)
+                # https://rasa.com/docs/rasa/pages/http-api#operation/replaceModel
+                self.status.set(ModelStatus.Replacing, "Running model is not latest, replacing...")
+                status, result = await self.endpoint("put", "model", json={
+                    "model_file": f"models/{latest_model}"
+                })
+                if status == 204:
+                    self.status.set(ModelStatus.Running, f"Model replaced.")
+                else:
+                    self.status.set(ModelStatus.Error, f"Replacement failed: {result}")
 
         return self.status.set(ModelStatus.Running, f"Current model: {await self.current()}")
 
