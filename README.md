@@ -1,6 +1,6 @@
-### ASAR: A HTTP Server to manage A few Rasa models
+### ASAR: A HTTP Server to Arrange Rasa models
 
-#### Features
+#### FEATURES
 
 - Supervisor's cli and ui to manage multiple rasa models
 - Async HTTP API to update config and model
@@ -8,33 +8,27 @@
 
 > 1 Replacing model takes some time, during which requests for that model will be waited but not be dropped
 
-#### HTTP API
-
-See http://localhost:5000/docs
-
-#### Supervisor
-
-
-
-#### Run
+#### RUN
 
 ##### Docker
 
 ```shell
-docker build . -t asar < Dockerfile
+docker build . -t asar
 ```
 
 ```shell
-docker run -d -p 5000:5000 -p 9999:9999 -v $(pwd)/../data:/data -v $(pwd):/app asar
+docker run -d -p 5000:5000 -p 9999:9999 -v $(pwd)/../data:/data -v $(pwd):/app --name asar asar
 ```
 
-##### Local
+##### Local(Not Recommended)
 
-```shell
-pip install -r requirements.txt
-```
+Install the required modules listed in Dockerfile, and run `supervisord`.
 
-```shell
-supervisord
-```
+#### HTTP API
+
+http://localhost:5000/docs
+
+#### Supervisor
+
+http://localhost:9999
 

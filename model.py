@@ -25,10 +25,6 @@ MODEL_DIR = DATA_DIR / 'model'
 if not MODEL_DIR.exists():
     MODEL_DIR.mkdir(exist_ok=True, parents=True)
 
-def full_path(path: Path) -> str:
-    return path.absolute().as_posix()
-
-
 class ModelStatus:
     Waiting = "WAITING"
     Starting = "STARTING"
@@ -41,7 +37,7 @@ class ModelStatus:
     def __init__(self, name: str) -> None:
         self.name = name
         self.status = ModelStatus.Stopped
-        self.msg = "Waiting to run"
+        self.msg = ""
         self.is_running = False
 
 
@@ -83,6 +79,7 @@ class Model:
     def get_model(name: str) -> "Model":
         return Model(name)
 
+
     async def run(self, data: dict={}):
         """Check and run latest model with data"""
         await self.current() # check current status
@@ -97,23 +94,24 @@ class Model:
                 f.write("\n".join([
                     f"[program:{self.program}]",
                     f"command=rasa run -p {self.port} --cors * --enable-api --log-file run.log",
-                    f"directory={full_path(self.dir)}",
+                    f"directory={self.dir.as_posix()}",
                     "redirect_stderr=true",
                     "",
                     f"[program:{self.train_program}]",
                     f"command=rasa train --num-threads {(cpu_count() or 6)-2}",
-                    f"directory={full_path(self.dir)}",
+                    f"directory={self.dir.as_posix()}",
                     "autostart=false",
                     "autorestart=false",
-                    "redirect_stderr=true"
+                    "redirect_stderr=true",
+                    ""
                 ]))
-
             # svctl.reloadConfig just do a diff, without actually doing the update
             # so we should call update in shell
             update_process = await asyncio.create_subprocess_exec(
                 "supervisorctl", "update", cwd=ROOT)
             await update_process.wait()
 
+        seconds, step = 0, 15
         if not self.latest() or data: # train
             self.status.set(ModelStatus.Training, "Training...")
             
@@ -134,7 +132,7 @@ class Model:
                     for pipe in config['pipeline']:
                         for key, value in pipe.items():
                             if isinstance(value, str) and value.startswith('.'):
-                                pipe[key] = full_path(self.path(value)) # to absolute path
+                                pipe[key] = self.path(value).as_posix()
                 with open(config_yml, "w") as w:
                     yaml.dump(config, w)
 
@@ -146,9 +144,9 @@ class Model:
                 "supervisorctl", "restart", self.train_program, cwd=ROOT)
             await restart_process.wait()
             await asyncio.sleep(30)
+            seconds = 30
 
         # wait until model trained
-        seconds, step = 30, 15
         latest_model = self.latest()
         while not latest_model:
             self.status.set(ModelStatus.Training, f"Waiting for model to be trained...{seconds} seconds")
@@ -165,11 +163,10 @@ class Model:
             await restart_process.wait()
 
         # wait until model started
-        seconds, step = 0, 5
+        seconds, step = 0, 10
         current_model: Optional[str] = None
         while True: 
             try:
-                self.status.set(ModelStatus.Starting, f"Waiting for model to start...{seconds} seconds")
                 status, result = await self.endpoint("get", "status")
                 if status == 200:
                     current_model = result.get("model_file", "").split("/")[-1]
@@ -177,9 +174,9 @@ class Model:
                 elif status == 409:
                     break
             except: pass
-
             await asyncio.sleep(step)
             seconds += step
+            self.status.set(ModelStatus.Starting, f"Waiting for model to start...{seconds} seconds")
 
         # use latest model
         # There is no need to consider repeated calls, 
@@ -188,7 +185,7 @@ class Model:
         if not current_model or current_model != latest_model:
             # Call Rasa to replace model, this method will make model down a while(~30s)
             # https://rasa.com/docs/rasa/pages/http-api#operation/replaceModel
-
+            await asyncio.sleep(1)
             self.status.set(ModelStatus.Replacing, "Running model is not latest, replacing...")
             status, result = await self.endpoint("put", "model", json={
                 "model_file": f"models/{latest_model}"
