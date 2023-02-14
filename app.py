@@ -1,21 +1,3 @@
-"""RAAS: A HTTP Server to Manage Multi Rasa Instance
-
-GET /model/<name> - model info
-POST /model/<name> - communicate to Rasa HTTP API
-{
-    "method": "post", "path": "webhooks/rest/webhook", 
-    "json": {
-        "sender": "xxxzc", "message": "hello"
-    }
-}
-PUT /model/<name> - put(replace) file and update(train) model
-{
-    "config.yml": { ... }, "dictionary/userdict.txt": "foo/nbar/n"
-}
-~~PATCH /model/<name> - update file and update model~~
-
-"""
-
 __author__ = "zicong xie"
 __email__ = "zicongx@foxmail.com"
 
@@ -26,41 +8,55 @@ from sanic import HTTPResponse, Request, Sanic
 from sanic.log import logger
 from sanic.response import json as json_resp
 
-from model import Model, Status
+
+from model import Model, ModelStatus
 
 app: Sanic = Sanic("rama")
-
+app.config.CORS_ORIGINS = "*"
 
 @app.get("/")
 async def index(r: Request) -> HTTPResponse:
+    """Get all models's status
+    """
     return json_resp([m.status.as_dict() for m in Model.get_all_models()])
 
 
 @app.get("/model/<name:str>")
 async def get_model(r: Request, name: str) -> HTTPResponse:
-    """Get model info"""
+    """Get model status
+    """
     model = Model.get_model(name)
     if not model.dir.exists():
-        return json_resp(model.log("NOT_EXTSTS", "does not exists").as_dict(), 400)
+        return json_resp(model.status.set("NOT_EXTSTS", "does not exists").as_dict(), 400)
     return json_resp(model.status.as_dict())
 
 
 @app.post("/model/<name:str>")
 async def post_model(r: Request, name: str) -> HTTPResponse:
     """Communicate to Rasa HTTP API
-    https://rasa.com/docs/rasa/pages/http-api
+    
+    You should put the following in request json body
 
-    Args:
-        method: HTTPMethod, default post
-        path: Rasa HTTP API Path, default "webhooks/rest/webhook"
-        **kwargs: e.g. json={}
-            see https://docs.aiohttp.org/en/stable/client.html
+    - path: Rasa HTTP API Path
+    - method: HTTP Method that path allowed
+    - **kwargs: arguments passed to [AIOHTTP Client](https://docs.aiohttp.org/en/stable/client.html)
+    
+    ```json
+    POST /model/name
+    {
+        "method": "post", // HTTP Method
+        "path": "webhooks/rest/webhook", // API Path
+        "json": { "sender": "xxxzc", "message": "hello" }, // json data
+    }
+    ```
+
+    See [Rasa HTTP API](https://rasa.com/docs/rasa/pages/http-api)
     """
     model = Model.get_model(name)
     if not model.status.is_running:
         return json_resp(model.status.as_dict(), 400)
     j = r.json or {}
-    status, result = await model.http(
+    status, result = await model.endpoint(
         j.pop("method", "post"), 
         j.pop("path", "webhooks/rest/webhook"),
         **j)
@@ -69,13 +65,32 @@ async def post_model(r: Request, name: str) -> HTTPResponse:
 
 @app.put("/model/<name:str>")
 async def put_model(r: Request, name: str) -> HTTPResponse:
-    """Replace config and update model
+    """Put files and update model.
+
+    files are storied in request json body { "path": content }
+
+    - if content is str, it will saved to path directly
+    - if content is json and path endswith .yml, json content will be converted and saved
     
-    { "config.yml": {}, "data/stories.yml": "", ... }
+    e.g.
+
+    ```json
+    PUT /model/name
+    {
+        // raw file content
+        "config.yml": "recipe: default.v1\n...",
+        // json format, will convert and save to domain.yml
+        "domain.yml": { "version": "3.1", ... },
+        // save to deeper path
+        "dictionary/userdict.txt": "foo\nbar\n"
+    }
+    ```
+
+    After saving all files, a new model will be trained and be used.
     """
     model = Model.get_model(name)
     app.add_task(model.run(r.json or {}))
-    model.log(Status.Training, "Starting")
+    model.status.set(ModelStatus.Training, "Starting")
     return json_resp(model.status.as_dict())
 
 
@@ -98,4 +113,4 @@ async def update_supervisor():
 app.add_task(update_supervisor())
 
 if __name__ == '__main__':    
-    app.run(host="127.0.0.1", port=5000, debug=True, auto_reload=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, auto_reload=True)

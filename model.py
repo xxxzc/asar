@@ -5,7 +5,6 @@ from pathlib import Path
 from shutil import copyfile, rmtree
 from typing import Optional, Union
 from xmlrpc.client import ServerProxy
-from dataclasses import dataclass, asdict
 
 from aiohttp import ClientSession
 from sanic.log import logger
@@ -30,7 +29,7 @@ def full_path(path: Path) -> str:
     return path.absolute().as_posix()
 
 
-class Status:
+class ModelStatus:
     Waiting = "WAITING"
     Starting = "STARTING"
     Training = "TRAINING"
@@ -39,28 +38,30 @@ class Status:
     Stopped = "STOPPED"
     Error = "ERROR"
 
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.status = ModelStatus.Stopped
+        self.msg = "Waiting to run"
+        self.is_running = False
 
-@dataclass
-class ModelStatus:
-    name: str # model name
-    status: str
-    msg: str = ""
-    is_running: bool = False
 
-    def formatted_msg(self):
-        run_status = Status.Running if self.is_running else Status.Stopped
+    @property
+    def message(self):
+        run_status = ModelStatus.Running if self.is_running else ModelStatus.Stopped
         run_status = "" if run_status == self.status else f" [{run_status}]"
         return f"Model <{self.name}>{run_status} [{self.status}] {self.msg}"
 
     
     def as_dict(self):
-        d =  asdict(self)
-        d["fmsg"] = self.formatted_msg()
-        return d
+        return dict(name=self.name, status=self.status, msg=self.msg,
+            is_running=self.is_running, message=self.message)
 
     
-    def log(self):
-        logger.info(self.formatted_msg())
+    def set(self, status: str, msg: str, log=True):
+        self.status = status
+        self.msg = msg
+        if log: logger.info(self.message)
+        return self
 
 
 class Model:
@@ -74,23 +75,13 @@ class Model:
         self.program = f"model_{name}"
         self.train_program = f"{self.program}_training"
         self.dir = MODEL_DIR / name
-        self.status: ModelStatus = ModelStatus(name, Status.Waiting)
-
+        self.status: ModelStatus = ModelStatus(name)
+        
 
     @staticmethod
     @lru_cache(maxsize=None)
     def get_model(name: str) -> "Model":
         return Model(name)
-
-
-    def log(self, status: str, msg: str="") -> ModelStatus:
-        """Log current status
-        """
-        self.status.status = status
-        self.status.msg = msg
-        self.status.log()
-        return self.status
- 
 
     async def run(self, data: dict={}):
         """Check and run latest model with data"""
@@ -124,7 +115,7 @@ class Model:
             await update_process.wait()
 
         if not self.latest() or data: # train
-            self.log(Status.Training, "Starting...")
+            self.status.set(ModelStatus.Training, "Training...")
             
             # put content to file in data
             for file, content in data.items():
@@ -147,6 +138,10 @@ class Model:
                 with open(config_yml, "w") as w:
                     yaml.dump(config, w)
 
+            update_process = await asyncio.create_subprocess_exec(
+                "supervisorctl", "update", cwd=ROOT)
+            await update_process.wait()
+
             restart_process = await asyncio.create_subprocess_exec(
                 "supervisorctl", "restart", self.train_program, cwd=ROOT)
             await restart_process.wait()
@@ -156,7 +151,7 @@ class Model:
         seconds, step = 30, 15
         latest_model = self.latest()
         while not latest_model:
-            self.log(Status.Training, f"Waiting for model to be trained...{seconds} seconds")
+            self.status.set(ModelStatus.Training, f"Waiting for model to be trained...{seconds} seconds")
             await asyncio.sleep(step)
             seconds += step
             latest_model = self.latest()
@@ -164,7 +159,7 @@ class Model:
         # restart model if stopped
         info = svctl.getProcessInfo(self.program)
         if info['state'] != 20:
-            self.log(Status.Stopped, "Restarting...")
+            self.status.set(ModelStatus.Stopped, "Restarting...")
             restart_process = await asyncio.create_subprocess_exec(
                 "supervisorctl", "restart", self.program, cwd=ROOT)
             await restart_process.wait()
@@ -174,8 +169,8 @@ class Model:
         current_model: Optional[str] = None
         while True: 
             try:
-                self.log(Status.Starting, f"Waiting for model to start...{seconds} seconds")
-                status, result = await self.http("get", "status")
+                self.status.set(ModelStatus.Starting, f"Waiting for model to start...{seconds} seconds")
+                status, result = await self.endpoint("get", "status")
                 if status == 200:
                     current_model = result.get("model_file", "").split("/")[-1]
                     break
@@ -194,16 +189,16 @@ class Model:
             # Call Rasa to replace model, this method will make model down a while(~30s)
             # https://rasa.com/docs/rasa/pages/http-api#operation/replaceModel
 
-            self.log(Status.Replacing, "Running model is not latest, replacing...")
-            status, result = await self.http("put", "model", json={
+            self.status.set(ModelStatus.Replacing, "Running model is not latest, replacing...")
+            status, result = await self.endpoint("put", "model", json={
                 "model_file": f"models/{latest_model}"
             })
             if status == 204:
                 logger.debug("Model replaced!")
             else:
-                self.log(Status.Error, f"Replacement failed: {result}")
+                self.status.set(ModelStatus.Error, f"Replacement failed: {result}")
 
-        return self.log(Status.Running, f"Current model: {await self.current()}")
+        return self.status.set(ModelStatus.Running, f"Current model: {await self.current()}")
 
     
     def latest(self) -> Optional[str]:
@@ -220,7 +215,7 @@ class Model:
 
     async def current(self) -> Optional[str]:
         """Return current model name if model is running and update status"""
-        status, result = await self.http("get", "status")
+        status, result = await self.endpoint("get", "status")
         if status == 200:
             self.status.is_running = True
             return result.get("model_file", "").split("/")[-1]
@@ -289,8 +284,8 @@ class Model:
         return f"http://localhost:{self.port}/{path}"
 
 
-    async def http(self, method="get", path: str="", **kwargs) -> tuple[int, dict]:
-        """Communicate to Rasa HTTP API 
+    async def endpoint(self, method="get", path: str="", **kwargs) -> tuple[int, dict]:
+        """Communicate to Rasa endpoint
         https://rasa.com/docs/rasa/pages/http-api
 
         Args:
@@ -302,7 +297,7 @@ class Model:
         try:
             async with ClientSession() as client:
                 http_method = getattr(client, method.lower())
-                if not http_method: return 404, {"error": f"HTTP method {http_method} is not valid." }
+                if not http_method: return 400, {"error": f"HTTP method {http_method} is not valid." }
                 async with http_method(self.url(path), **kwargs) as resp:
                     result = {}
                     if resp.content_type == "application/json":
@@ -315,4 +310,5 @@ class Model:
 
     @staticmethod
     def get_all_models() -> list["Model"]:
+        """Get all models in model dir"""
         return [Model.get_model(r.name) for r in MODEL_DIR.iterdir()]

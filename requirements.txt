@@ -1,0 +1,5 @@
+rasa
+aiohttp
+ruamel.yaml
+supervisor
+sanic-ext<22
