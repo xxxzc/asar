@@ -1,21 +1,22 @@
 import asyncio
 from pathlib import Path
-from inspect import cleandoc
 
 from sanic import HTTPResponse, Request, Sanic
 from sanic.log import logger
-from sanic.response import json as json_resp
+from sanic.response import json as json_resp, redirect
+from aiohttp import ClientSession
 
 from model import Model, ModelStatus
 
-app: Sanic = Sanic("rama")
+APP_NAME = "asar"
+
+app: Sanic = Sanic(APP_NAME)
 app.config.CORS_ORIGINS = "*"
 
 
-@app.get("/")
-async def index(r: Request) -> HTTPResponse:
-    """Get all models's status"""
-    return json_resp([m.status.as_dict() for m in Model.get_all_models()])
+@app.before_server_start
+def before_start(app: Sanic, loop):
+    app.ctx.client = ClientSession(loop=loop)
 
 
 @app.get("/model/<name:str>")
@@ -32,6 +33,7 @@ async def post_model(r: Request, name: str) -> HTTPResponse:
     """Communicate to Rasa HTTP API
     
     You should put the following in request json body
+    See [Rasa HTTP API](https://rasa.com/docs/rasa/pages/http-api)
 
     - path: Rasa HTTP API Path
     - method: HTTP Method that path allowed
@@ -44,7 +46,7 @@ async def post_model(r: Request, name: str) -> HTTPResponse:
         "json": { "sender": "xxxzc", "message": "hello" }, // json data
     }
 
-    See [Rasa HTTP API](https://rasa.com/docs/rasa/pages/http-api)
+    Return 400 if model is not running
     """
     model = Model.get_model(name)
     if not model.status.is_running:
@@ -81,6 +83,33 @@ async def put_model(r: Request, name: str) -> HTTPResponse:
         ModelStatus.Training, "started.").as_dict())
 
 
+
+@app.route("/supervisor/<path:path>")
+async def proxy_to_supervisor(r: Request, path: str) -> HTTPResponse:
+    """Reverse proxy for supervisor"""
+    if r.args.get("processname", "") == APP_NAME and r.args.get("action", "") == "stop":
+        return redirect("/supervisor/") # do not stop this app
+
+    method = getattr(r.app.ctx.client, r.method.lower())
+    async with method("http://localhost:9999/"+path, headers=r.headers,
+            params=r.args, json=r.json) as resp:
+        response = await r.respond(content_type=resp.content_type, 
+            status=resp.status, headers=resp.headers)
+        async for chunk in resp.content.iter_any():
+            await response.send(chunk)
+        await response.eof()
+        return response
+
+
+def redirect_to_supervisor(r: Request) -> HTTPResponse:
+    if r.path == "/" and r.args.get("message", None):
+        return proxy_to_supervisor(r, "")
+    return redirect("/supervisor/")
+
+app.add_route(redirect_to_supervisor, "/")
+app.add_route(redirect_to_supervisor, "/supervisor")
+
+
 async def check_models(app: Sanic, seconds: int):
     """Check models"""
     while True:
@@ -99,4 +128,4 @@ async def update_supervisor():
 app.add_task(update_supervisor())
 
 if __name__ == '__main__':    
-    app.run(host="0.0.0.0", port=5000, debug=False, auto_reload=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, auto_reload=True)

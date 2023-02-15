@@ -2,7 +2,7 @@
 
 #### Features
 
-- Supervisor cli and ui to manage multiple rasa models
+- [Supervisor](http://supervisord.org/) cli and ui to manage multiple rasa models
 - Async HTTP API to put file and update model
 - Train and replace model without affecting current service<sup>1</sup>
 
@@ -17,7 +17,7 @@ docker build . -t asar
 ```
 
 ```shell
-docker run -d -p 5000:5000 -p 9999:9999 -v ~/data:/data -v $(pwd):/app --name asar asar
+docker run -d -p 5000:5000 -v ~/data:/data -v $(pwd):/app --name asar asar
 ```
 
 - 5000: This server
@@ -40,10 +40,11 @@ Just see app.py, or http://localhost:5000/docs
 - GET /model/name get model info
 - POST /model/name communicate to Rasa HTTP API
 - PUT /model/name put files and update model
+- GET /supervisor supervisor ui
 
 #### Supervisor
 
-http://localhost:9999
+http://localhost:5000/supervisor
 
 #### Claims
 
