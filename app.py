@@ -4,7 +4,7 @@ from pathlib import Path
 from sanic import HTTPResponse, Request, Sanic
 from sanic.log import logger
 from sanic.response import json as json_resp, redirect
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientResponse
 
 from model import Model, ModelStatus
 
@@ -17,6 +17,33 @@ app.config.CORS_ORIGINS = "*"
 @app.before_server_start
 def before_start(app: Sanic, loop):
     app.ctx.client = ClientSession(loop=loop)
+
+
+@app.route("/supervisor/<path:path>")
+async def proxy_to_supervisor(r: Request, path: str) -> HTTPResponse:
+    """Reverse proxy for supervisor"""
+    if r.args.get("processname", "") == APP_NAME and r.args.get("action", "") == "stop":
+        return redirect("/supervisor/") # do not stop this app
+
+    method = getattr(r.app.ctx.client, r.method.lower())
+    async with method("http://localhost:9999/"+path, headers=r.headers,
+            params=r.args, json=r.json) as resp:
+        resp: ClientResponse
+        response = await r.respond(content_type=resp.content_type, 
+            status=resp.status, headers=resp.headers)
+        async for data in resp.content.iter_any():
+            await response.send(data)
+        await response.eof()
+        return response
+
+
+def redirect_to_supervisor(r: Request) -> HTTPResponse:
+    if r.path == "/" and r.args.get("message", None):
+        return proxy_to_supervisor(r, "")
+    return redirect("/supervisor/")
+
+app.add_route(redirect_to_supervisor, "/")
+app.add_route(redirect_to_supervisor, "/supervisor")
 
 
 @app.get("/model/<name:str>")
@@ -81,33 +108,6 @@ async def put_model(r: Request, name: str) -> HTTPResponse:
     app.add_task(model.run(r.json or {}))
     return json_resp(model.status.set(
         ModelStatus.Training, "started.").as_dict())
-
-
-
-@app.route("/supervisor/<path:path>")
-async def proxy_to_supervisor(r: Request, path: str) -> HTTPResponse:
-    """Reverse proxy for supervisor"""
-    if r.args.get("processname", "") == APP_NAME and r.args.get("action", "") == "stop":
-        return redirect("/supervisor/") # do not stop this app
-
-    method = getattr(r.app.ctx.client, r.method.lower())
-    async with method("http://localhost:9999/"+path, headers=r.headers,
-            params=r.args, json=r.json) as resp:
-        response = await r.respond(content_type=resp.content_type, 
-            status=resp.status, headers=resp.headers)
-        async for chunk in resp.content.iter_any():
-            await response.send(chunk)
-        await response.eof()
-        return response
-
-
-def redirect_to_supervisor(r: Request) -> HTTPResponse:
-    if r.path == "/" and r.args.get("message", None):
-        return proxy_to_supervisor(r, "")
-    return redirect("/supervisor/")
-
-app.add_route(redirect_to_supervisor, "/")
-app.add_route(redirect_to_supervisor, "/supervisor")
 
 
 async def check_models(app: Sanic, seconds: int):
