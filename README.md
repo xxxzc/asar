@@ -22,7 +22,7 @@ docker run -d -p 5000:5000 -v ~/data:/data -v $(pwd):/app --name asar asar
 
 - 5000: This server
 - 9999: Supervisor
-- /data: store model files in /data/model/<name>/
+- /data: store model files to /data/model/name
 - /app: auto reload code
 
 ```shell
@@ -37,10 +37,10 @@ install rasa and the required modules listed in Dockerfile, then run `supervisor
 
 Just see app.py, or http://localhost:5000/docs
 
+- GET /supervisor supervisor ui
 - GET /model/name get model info
 - POST /model/name communicate to Rasa HTTP API
 - PUT /model/name put files and update model
-- GET /supervisor supervisor ui
 
 #### Supervisor
 
