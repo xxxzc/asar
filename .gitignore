@@ -3,3 +3,5 @@ supervisord.log
 supervisord.pid
 .config
 .keras
+.vscode
+.bash_history

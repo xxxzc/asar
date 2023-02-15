@@ -1,6 +1,7 @@
 import asyncio
 from functools import cached_property, lru_cache
 from os import cpu_count
+from datetime import datetime
 from pathlib import Path
 from shutil import copyfile, rmtree
 from typing import Optional, Union
@@ -39,6 +40,7 @@ class ModelStatus:
         self.status = ModelStatus.Stopped
         self.msg = ""
         self.is_running = False
+        self.status_time = datetime.now()
 
 
     @property
@@ -50,12 +52,14 @@ class ModelStatus:
     
     def as_dict(self):
         return dict(name=self.name, status=self.status, msg=self.msg,
-            is_running=self.is_running, message=self.message)
+            is_running=self.is_running, message=self.message, 
+            status_time=self.status_time.isoformat())
 
     
     def set(self, status: str, msg: str, log=True):
         self.status = status
         self.msg = msg
+        self.status_time = datetime.now()
         if log: logger.info(self.message)
         return self
 

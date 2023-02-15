@@ -88,7 +88,7 @@ async def check_models(app: Sanic, seconds: int):
             app.add_task(model.run())
         await asyncio.sleep(seconds)
 
-app.add_task(check_models(app, 60))
+app.add_task(check_models(app, 60*5))
 
 
 async def update_supervisor():

@@ -37,6 +37,10 @@ install rasa and the required modules listed in Dockerfile, then run `supervisor
 
 Just see app.py, or http://localhost:5000/docs
 
+- GET /model/name get model info
+- POST /model/name communicate to Rasa HTTP API
+- PUT /model/name put files and update model
+
 #### Supervisor
 
 http://localhost:9999
