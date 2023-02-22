@@ -6,6 +6,7 @@ from pathlib import Path
 from shutil import copyfile, rmtree
 from typing import Optional, Union
 from xmlrpc.client import ServerProxy
+import filecmp
 
 from aiohttp import ClientSession
 from sanic.log import logger
@@ -256,13 +257,20 @@ class Model:
                 - dict: store yml if path is yml then json
         """
         path = self.path(path)
-        with open(path, 'w') as f:
+        tmp = Path('/tmp') / self.name / path
+        with open(tmp, 'w') as f:
             if isinstance(obj, str):
                 f.write(obj)
             elif path.suffix == '.yml':
                 yaml.dump(obj, f)
-            else:
+            elif path.suffix == '.json':
                 json.dump(obj, f)
+        
+        if not filecmp.cmp(path, tmp, False): # file content is different
+            tmp.rename(path)
+            return True
+        return False
+
 
 
     @cached_property
