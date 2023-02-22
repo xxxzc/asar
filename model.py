@@ -76,7 +76,6 @@ class Model:
         self.train_program = f"{self.program}_training"
         self.dir = MODEL_DIR / name
         self.status: ModelStatus = ModelStatus(name)
-        self.path("models", mkdir=True)
         
 
     @staticmethod
@@ -87,6 +86,13 @@ class Model:
 
     async def run(self, data: dict={}):
         """Check and run latest model with data"""
+
+        # data means we are doing train
+        if not data and not self.dir.exists():
+            return self.status.set(ModelStatus.Waiting, f"You should create {self.dir} first!")
+        
+        self.path("models", mkdir=True)
+
         await self.current() # check running status
 
         # check supervisor.conf
@@ -114,7 +120,7 @@ class Model:
             await update_process.wait()
 
         seconds, step = 0, 15
-        if not self.latest() or data: # train
+        if (not self.latest() and not self.is_training()) or data: # train
             self.status.set(ModelStatus.Training, "Training...")
             
             # put content to file in data
