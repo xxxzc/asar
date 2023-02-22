@@ -52,6 +52,7 @@ async def get_model(r: Request, name: str) -> HTTPResponse:
     model = Model.get_model(name)
     if not model.dir.exists():
         return json_resp(model.status.set("NOT_EXTSTS", "does not exist").as_dict(), 400)
+    model.is_training()
     return json_resp(model.status.as_dict())
 
 

@@ -87,7 +87,7 @@ class Model:
 
     async def run(self, data: dict={}):
         """Check and run latest model with data"""
-        await self.current() # check current status
+        await self.current() # check running status
 
         # check supervisor.conf
         conf = self.path("supervisor.conf")
@@ -148,11 +148,15 @@ class Model:
             await asyncio.sleep(30)
             seconds = 30
 
+        if self.is_training(): # model is training
+            return self.status
+
         # wait until model trained
-        while not self.latest():
-            self.status.set(ModelStatus.Training, f"Waiting for model to be trained...{seconds} seconds")
-            await asyncio.sleep(step)
-            seconds += step
+        # Use background task to checking, rather than waiting
+        # while not self.latest():
+        #     self.status.set(ModelStatus.Training, f"Waiting for model to be trained...{seconds} seconds")
+        #     await asyncio.sleep(step)
+        #     seconds += step
         
         # restart model if stopped
         info = svctl.getProcessInfo(self.program)
@@ -174,20 +178,19 @@ class Model:
             seconds += step
             self.status.set(ModelStatus.Starting, f"Waiting for model to start...{seconds} seconds")
 
-        async with asyncio.Lock():
-            latest_model = self.latest()
-            current_model = await self.current()
-            if not current_model or current_model != latest_model:
-                # Call Rasa to replace model, this method will make model down a while(~30s)
-                # https://rasa.com/docs/rasa/pages/http-api#operation/replaceModel
-                self.status.set(ModelStatus.Replacing, "Running model is not latest, replacing...")
-                status, result = await self.endpoint("put", "model", json={
-                    "model_file": f"models/{latest_model}"
-                })
-                if status == 204:
-                    self.status.set(ModelStatus.Running, f"Model replaced.")
-                else:
-                    self.status.set(ModelStatus.Error, f"Replacement failed: {result}")
+        latest_model = self.latest()
+        current_model = await self.current()
+        if not current_model or current_model != latest_model:
+            # Call Rasa to replace model, this method will make model down a while(~30s)
+            # https://rasa.com/docs/rasa/pages/http-api#operation/replaceModel
+            self.status.set(ModelStatus.Replacing, "Running model is not latest, replacing...")
+            status, result = await self.endpoint("put", "model", json={
+                "model_file": f"models/{latest_model}"
+            })
+            if status == 204:
+                self.status.set(ModelStatus.Running, f"Model replaced.")
+            else:
+                self.status.set(ModelStatus.Error, f"Replacement failed: {result}")
 
         return self.status.set(ModelStatus.Running, f"Current model: {await self.current()}")
 
@@ -297,6 +300,14 @@ class Model:
         except Exception as e:
             logger.debug(e)
             return 500, {"error": str(e)}
+
+
+    def is_training(self) -> bool:
+        program = svctl.getProcessInfo(self.train_program)
+        if program['state'] == 20:
+            self.status.set(ModelStatus.Training, "is traning")
+            return True
+        return False
 
 
     @staticmethod
