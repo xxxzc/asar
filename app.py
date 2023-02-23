@@ -50,10 +50,11 @@ app.add_route(redirect_to_supervisor, "/supervisor")
 
 async def check_models(app: Sanic):
     while True:
-        for model in Model.get_all_models():
-            await model.check()
+        models = list(Model.get_all_models())
         process = await asyncio.create_subprocess_exec("supervisorctl", "update", cwd=Path(__file__).parent)
         await process.wait()
+        for model in models:
+            await model.check()
         await asyncio.sleep(60)
 
 app.add_task(check_models)
