@@ -29,13 +29,13 @@ async def proxy_to_supervisor(r: Request, path: str) -> HTTPResponse:
     async with method("http://localhost:9999/"+path, headers=r.headers,
             params=r.args, json=r.json) as resp:
         resp: ClientResponse
+        if ((r.path.endswith('index.html') or r.path.endswith('/'))) and r.args:
+            return redirect("/supervisor/")
         response = await r.respond(content_type=resp.content_type, 
             status=resp.status, headers=resp.headers)
         async for data in resp.content.iter_any():
             await response.send(data)
         await response.eof()
-        if r.path.endswith('index.html') or r.path.endswith('/'):
-            return redirect("/supervisor/")
         return response
 
 
