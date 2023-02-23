@@ -4,9 +4,9 @@
 
 - [Supervisor](http://supervisord.org/) cli and ui to manage multiple rasa models
 - Async HTTP API to put file and update model
-- Train and replace model without affecting current service<sup>1</sup>
+- Train and update model without affecting current service<sup>1</sup>
 
-> 1 Replacing model takes some time, during which requests for that model will be waited but not be dropped
+> 1 Switch between two instances
 
 #### RUN
 

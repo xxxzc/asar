@@ -34,6 +34,8 @@ async def proxy_to_supervisor(r: Request, path: str) -> HTTPResponse:
         async for data in resp.content.iter_any():
             await response.send(data)
         await response.eof()
+        if r.path.endswith('index.html') or r.path.endswith('/'):
+            return redirect("/supervisor/")
         return response
 
 
@@ -46,14 +48,22 @@ app.add_route(redirect_to_supervisor, "/")
 app.add_route(redirect_to_supervisor, "/supervisor")
 
 
+async def check_models(app: Sanic):
+    while True:
+        for model in Model.get_all_models():
+            await model.check()
+        process = await asyncio.create_subprocess_exec("supervisorctl", "update", cwd=Path(__file__).parent)
+        await process.wait()
+        await asyncio.sleep(60)
+
+app.add_task(check_models)
+
+
 @app.get("/model/<name:str>")
 async def get_model(r: Request, name: str) -> HTTPResponse:
     """Get model status"""
     model = Model.get_model(name)
-    if not model.dir.exists():
-        return json_resp(model.status.set("NOT_EXTSTS", "does not exist").as_dict(), 400)
-    model.is_training()
-    return json_resp(model.status.as_dict())
+    return (await model.check()).resp()
 
 
 @app.post("/model/<name:str>")
@@ -74,11 +84,11 @@ async def post_model(r: Request, name: str) -> HTTPResponse:
         "json": { "sender": "xxxzc", "message": "hello" }, // json data
     }
 
-    Return 400 if model is not running
+    Return 500 if model is not running
     """
     model = Model.get_model(name)
     if not model.status.is_running:
-        return json_resp(model.status.as_dict(), 400)
+        return json_resp(model.status.asdict(), 400)
     j = r.json or {}
     status, result = await model.endpoint(
         j.pop("method", "post"), 
@@ -106,27 +116,7 @@ async def put_model(r: Request, name: str) -> HTTPResponse:
     After saving all files, a new model will be trained and be used.
     """
     model = Model.get_model(name)
-    app.add_task(model.run(r.json or {}))
-    return json_resp(model.status.set(
-        ModelStatus.Training, "started.").as_dict())
-
-
-async def check_models(app: Sanic, seconds: int):
-    """Check models"""
-    while True:
-        for model in Model.get_all_models():
-            app.add_task(model.run())
-        await asyncio.sleep(seconds)
-
-app.add_task(check_models(app, 60*5))
-
-
-async def update_supervisor():
-    """Update supervisor at start"""
-    process = await asyncio.create_subprocess_exec("supervisorctl", "update", cwd=Path(__file__).parent)
-    await process.wait()
-
-app.add_task(update_supervisor())
+    return (await model.train(r.json or {})).resp()
 
 if __name__ == '__main__':    
     app.run(host="0.0.0.0", port=5000, debug=True, auto_reload=True)
