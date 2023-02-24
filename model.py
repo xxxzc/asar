@@ -283,6 +283,7 @@ class Model:
         """
         path = self.path(path)
         tmp = Path('/tmp') / self.name / path
+        tmp.parent.mkdir(exist_ok=True, parents=True)
         with open(tmp, 'w') as f:
             if isinstance(obj, str):
                 f.write(obj)
