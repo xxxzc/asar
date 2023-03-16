@@ -242,7 +242,8 @@ class Model:
                 "redirect_stderr=true",
                 ""
             ]))
-            await asyncio.create_subprocess_exec("supervisorctl", "update", cwd=ROOT)
+            process = await asyncio.create_subprocess_exec("supervisorctl", "update", cwd=ROOT)
+            await process.wait()
 
         if 'config.yml' in data:
             config = data['config.yml']
