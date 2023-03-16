@@ -154,7 +154,6 @@ class Model:
         self.program2 = Program(self.name, self.port+1)
         self.train_program = Program(f"{self.name}_tranining")
         self.current_program: Program = self.program1
-        self.put_supervisor_conf()
 
         self.status = ModelStatus(self.name)
 
@@ -211,6 +210,39 @@ class Model:
         self.status.set(ModelStatus.Training, "Updating data")
 
         self.path("models", mkdir=True)
+
+        train_command = self.path("train.sh")
+        if not train_command.exists():
+            self.put(train_command.name, "\n".join(
+                [f"rasa train --num-threads {(cpu_count() or 6)-2}",
+                 f"curl http://localhost:5000/model/{self.name}?signal=use_latest", ""]))
+
+        supervisor_conf = self.path(f"supervisor-{CONF_VERSION}.conf")
+        if not supervisor_conf.exists():
+            self.put(supervisor_conf.name, "\n".join([
+                f"[program:{self.program1.name}]",
+                f"command=rasa run -p {self.program1.port} --cors * --enable-api --log-file run.log",
+                f"directory={self.dir.as_posix()}",
+                "redirect_stderr=true",
+                "autostart=false",
+                "autorestart=false",
+                "",
+                f"[program:{self.program2.name}]",
+                f"command=rasa run -p {self.program2.port} --cors * --enable-api --log-file run.log",
+                f"directory={self.dir.as_posix()}",
+                "redirect_stderr=true",
+                "autostart=false",
+                "autorestart=false",
+                "",
+                f"[program:{self.train_program.name}]",
+                f"command=sh train.sh",
+                f"directory={self.dir.as_posix()}",
+                "autostart=false",
+                "autorestart=false",
+                "redirect_stderr=true",
+                ""
+            ]))
+            await asyncio.create_subprocess_exec("supervisorctl", "update", cwd=ROOT)
 
         if 'config.yml' in data:
             config = data['config.yml']
@@ -316,40 +348,6 @@ class Model:
 
     async def endpoint(self, method="get", path: str="", **kwargs) -> tuple[int, dict]:
         return await self.current_program.endpoint(method, path, **kwargs)
-
-
-    def put_supervisor_conf(self):
-        train_command = self.path("train.sh")
-        if not train_command.exists():
-            self.put(train_command.name, "\n".join(
-                [f"rasa train --num-threads {(cpu_count() or 6)-2}",
-                 f"curl http://localhost:5000/model/{self.name}?signal=use_latest", ""]))
-
-        supervisor_conf = self.path(f"supervisor-{CONF_VERSION}.conf")
-        if not supervisor_conf.exists():
-            self.put(supervisor_conf.name, "\n".join([
-                f"[program:{self.program1.name}]",
-                f"command=rasa run -p {self.program1.port} --cors * --enable-api --log-file run.log",
-                f"directory={self.dir.as_posix()}",
-                "redirect_stderr=true",
-                "autostart=false",
-                "autorestart=false",
-                "",
-                f"[program:{self.program2.name}]",
-                f"command=rasa run -p {self.program2.port} --cors * --enable-api --log-file run.log",
-                f"directory={self.dir.as_posix()}",
-                "redirect_stderr=true",
-                "autostart=false",
-                "autorestart=false",
-                "",
-                f"[program:{self.train_program.name}]",
-                f"command=sh train.sh",
-                f"directory={self.dir.as_posix()}",
-                "autostart=false",
-                "autorestart=false",
-                "redirect_stderr=true",
-                ""
-            ]))
 
 
     @staticmethod

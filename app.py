@@ -119,5 +119,6 @@ async def put_model(r: Request, name: str) -> HTTPResponse:
     model = Model.get_model(name)
     return (await model.train(r.json or {})).resp()
 
+
 if __name__ == '__main__':    
     app.run(host="0.0.0.0", port=5000, debug=True, auto_reload=True)
