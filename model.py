@@ -86,9 +86,12 @@ class Program:
 
 
     def is_running(self) -> bool:
-        process = svctl.getProcessInfo(self.name)
-        if process['state'] == 20:
-            return True
+        try:
+            process = svctl.getProcessInfo(self.name)
+            if process['state'] == 20:
+                return True
+        except:
+            return False
         return False
 
     
