@@ -67,6 +67,8 @@ class ModelStatus:
     def set(self, text: str, msg: str, log=True):
         self.text = text
         self.msg = msg
+        if text == ModelStatus.Stopped:
+            self.is_running = False
         self.status_time = datetime.now()
         if log: logger.info(self.message)
         return self
@@ -332,7 +334,24 @@ class Model:
             tmp.rename(path)
             return True
         return False
+    
 
+    async def stop(self):
+        """Stop this model
+        """
+        try:
+            await self.program1.stop()
+            await self.program2.stop()
+            await self.train_program.stop()
+        except:
+            pass
+        return self.status.set(ModelStatus.Stopped, "Stopped.")
+    
+
+    def delete(self):
+        """Delete model"""
+        self.path(rm=True) # supervisor will stop those programs
+        return self.status.set(ModelStatus.Stopped, "Deleted.")
 
 
     @cached_property

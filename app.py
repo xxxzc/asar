@@ -6,7 +6,7 @@ from sanic.log import logger
 from sanic.response import json as json_resp, redirect
 from aiohttp import ClientSession, ClientResponse
 
-from model import Model, ModelStatus
+from model import Model
 
 APP_NAME = "asar"
 
@@ -118,6 +118,13 @@ async def put_model(r: Request, name: str) -> HTTPResponse:
     """
     model = Model.get_model(name)
     return (await model.train(r.json or {})).resp()
+
+
+@app.delete("/model/<name:str>")
+def delete_model(r: Request, name: str) -> HTTPResponse:
+    """Delete model"""
+    model = Model.get_model(name)
+    return model.delete().resp()
 
 
 if __name__ == '__main__':    
